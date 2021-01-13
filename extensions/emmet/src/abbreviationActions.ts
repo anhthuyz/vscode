@@ -25,7 +25,7 @@ const hexColorRegex = /^#[\da-fA-F]{0,6}$/;
  * Both successful (accepted) and non-successful (cancelled) expansion attempts are stored.
  * The expansion attempts are stored per extension reload.
  */
-let wrapWithAbbreviationHistory: Set<string> = new Set();
+const wrapWithAbbreviationHistory: Set<string> = new Set();
 
 const localize = nls.loadMessageBundle();
 
@@ -302,8 +302,6 @@ function doWrapping(_: boolean, args: any) {
 				}
 			});
 			quickPick.onDidChangeSelection((e) => {
-				// this calls onDidAccept which calls onDidHide,
-				// so only set valueToUse here
 				if (e.length) {
 					abbreviationToUse = e[0].label;
 				}
