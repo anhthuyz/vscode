@@ -25,7 +25,7 @@ const hexColorRegex = /^#[\da-fA-F]{0,6}$/;
  * Both successful (accepted) and non-successful (cancelled) expansion attempts are stored.
  * The expansion attempts are stored per extension reload.
  */
-let previousItems: Set<string> = new Set();
+let wrapWithAbbreviationHistory: Set<string> = new Set();
 
 const localize = nls.loadMessageBundle();
 
@@ -79,7 +79,8 @@ function doWrapping(_: boolean, args: any) {
 	let currentValue = '';
 	const helper = getEmmetHelper();
 
-	// Fetch general information for the succesive expansions. i.e. the ranges to replace and its contents
+	// Fetch general information for the successive expansions. i.e. the ranges to replace and its contents
+	// The elements of this array are altered during applyPreview
 	const rangesToReplace: PreviewRangesWithContent[] = editor.selections.sort((a: vscode.Selection, b: vscode.Selection) => { return a.start.compareTo(b.start); }).map(selection => {
 		let rangeToReplace: vscode.Range = selection.isReversed ? new vscode.Range(selection.active, selection.anchor) : selection;
 		const document = editor.document;
@@ -248,7 +249,7 @@ function doWrapping(_: boolean, args: any) {
 	}
 
 	function getHistoryAsQuickPickItems(): vscode.QuickPickItem[] {
-		return Array.from(previousItems)
+		return Array.from(wrapWithAbbreviationHistory)
 			.map(item => {
 				const quickPickItem: vscode.QuickPickItem = {
 					label: item
@@ -259,58 +260,70 @@ function doWrapping(_: boolean, args: any) {
 
 	function getAbbreviationFromQuickPick(): Thenable<string> {
 		return new Promise<string>((resolve) => {
-			const pick = vscode.window.createQuickPick();
-			let valueToUse = '';
-			let accepted = false;
-			let changeRecommendations = true;
-			pick.title = localize('emmetEnterAbbreviationForWrap', 'Enter abbreviation, or choose a previous one');
-			pick.canSelectMany = false;
-			pick.items = getHistoryAsQuickPickItems();
+			const quickPick = vscode.window.createQuickPick();
+			let abbreviationToUse = '';
+			let userDidChooseAbbreviation = false;
+			let lastActiveItem: vscode.QuickPickItem | undefined;
+			let currentActiveItem: vscode.QuickPickItem | undefined;
+			let lastQuickPickItems: readonly vscode.QuickPickItem[] | undefined;
+			let currentQuickPickItems: readonly vscode.QuickPickItem[] | undefined;
 
-			pick.onDidChangeValue(e => {
-				valueToUse = e;
-				if (changeRecommendations) {
-					// create items to display in the quick pick
-					let items = getHistoryAsQuickPickItems();
-					if (valueToUse) {
-						// filter items like a search box
-						items = items.filter(item => item.label.startsWith(valueToUse));
-					}
-					pick.items = items;
+			quickPick.title = localize('emmetEnterAbbreviationForWrap', 'Enter abbreviation, or choose a previous one');
+			quickPick.canSelectMany = false;
+			quickPick.items = getHistoryAsQuickPickItems();
+
+			quickPick.onDidChangeValue(e => {
+				abbreviationToUse = e;
+				let items = getHistoryAsQuickPickItems();
+				if (abbreviationToUse) {
+					// filter items like a search box
+					items = items.filter(item => item.label.startsWith(abbreviationToUse));
 				}
-				changeRecommendations = true;
-				// update editor preview
-				inputChanged(valueToUse);
+				quickPick.items = items;
+				inputChanged(abbreviationToUse);
 			});
-			pick.onDidChangeActive((e) => {
-				// firing this event means the user has selected a value
-				// to fill the input box with via arrow keys
-				if (e.length) {
-					pick.value = e[0].label;
+			quickPick.onDidChangeActive((e) => {
+				// We only want to handle the case where
+				// the user switched between two values via arrow keys.
+				// This case occurs when the items stay the same from the last call
+				// to onDidChangeActive, but the lastActiveItem differs from the
+				// currentActiveItem, and both are not null
+				lastActiveItem = currentActiveItem;
+				lastQuickPickItems = currentQuickPickItems;
+				currentQuickPickItems = quickPick.items;
+				currentActiveItem = e ? e[0] : undefined;
+				if (JSON.stringify(lastQuickPickItems) === JSON.stringify(currentQuickPickItems)
+					&& lastActiveItem && currentActiveItem
+					&& lastActiveItem.label !== currentActiveItem.label) {
+					// only change the input, keep items the same
+					abbreviationToUse = currentActiveItem.label;
+					quickPick.value = abbreviationToUse;
+					inputChanged(abbreviationToUse);
 				}
-				// show the same recommendations as before
-				changeRecommendations = false;
 			});
-			pick.onDidChangeSelection((e) => {
+			quickPick.onDidChangeSelection((e) => {
 				// this calls onDidAccept which calls onDidHide,
 				// so only set valueToUse here
 				if (e.length) {
-					valueToUse = e[0].label;
+					abbreviationToUse = e[0].label;
 				}
 			});
-			pick.onDidAccept(() => {
-				accepted = true;
-				pick.hide();
+			quickPick.onDidAccept(() => {
+				userDidChooseAbbreviation = true;
+				quickPick.hide();
 			});
-			pick.onDidHide(() => {
-				if (accepted) {
-					previousItems.add(valueToUse);
-					resolve(valueToUse);
+			quickPick.onDidHide(() => {
+				let finalAbbreviationToUse;
+				if (userDidChooseAbbreviation && abbreviationToUse) {
+					wrapWithAbbreviationHistory.add(abbreviationToUse);
+					finalAbbreviationToUse = abbreviationToUse;
 				} else {
-					resolve('');
+					finalAbbreviationToUse = '';
 				}
+				quickPick.dispose();
+				resolve(finalAbbreviationToUse);
 			});
-			pick.show();
+			quickPick.show();
 		});
 	}
 
